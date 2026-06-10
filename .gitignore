@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+*.json
+!.env.example
+.google-sheets-token.json
+.gmail-token.json
+release_draft_preview.html
+logs/
+.vendor/
