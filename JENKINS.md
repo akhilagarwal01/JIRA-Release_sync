@@ -9,7 +9,7 @@ This guide is for running `sync.py` on a **local Jenkins** instance (e.g. `http:
 | Item | Detail |
 |------|--------|
 | Script | `sync.py` via `scripts/run_sync.sh` |
-| Schedule | Every **Monday ~9:00 AM** (`H 9 * * 1`) |
+| Schedule | Every **Monday ~11:00 AM** (`H 11 * * 1`) |
 | JQL window | Last **7 days** (`created >= -7d`) |
 | Output | Appends release rows to the shared Google Sheet |
 
