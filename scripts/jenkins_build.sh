@@ -14,7 +14,7 @@ set -euo pipefail
 
 WORKSPACE="${WORKSPACE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SECRETS_DIR="${JIRA_SYNC_SECRETS_DIR:-/opt/jira-sheet-sync-secrets}"
-DAYS="${JIRA_SYNC_DAYS:-7}"
+DAYS="${JIRA_SYNC_DAYS:-7}" # number of days to sync
 
 cd "$WORKSPACE"
 
