@@ -6,9 +6,10 @@
 #   $JIRA_SYNC_SECRETS_DIR/client-secret.json
 #   $JIRA_SYNC_SECRETS_DIR/.google-sheets-token.json  (created after first OAuth login)
 #
-# Optional env:
-#   JIRA_SYNC_DAYS=7          override JQL created >= -Nd window
-#   JIRA_SYNC_SECRETS_DIR     default: /opt/jira-sheet-sync-secrets
+# Optional env (Jenkins job parameters):
+#   GOOGLE_SHEETS_TAB_NAME    override worksheet tab; falls back to secrets .env if unset
+#   JIRA_SYNC_DAYS=7            override JQL created >= -Nd window
+#   JIRA_SYNC_SECRETS_DIR       default: /opt/jira-sheet-sync-secrets
 
 set -euo pipefail
 
@@ -26,6 +27,16 @@ for f in .env client-secret.json; do
 done
 
 cp "$SECRETS_DIR/.env" "$WORKSPACE/.env"
+if [[ -n "${GOOGLE_SHEETS_TAB_NAME:-}" ]]; then
+  # Job parameter overrides secrets .env
+  grep -v '^GOOGLE_SHEETS_TAB_NAME=' "$WORKSPACE/.env" > "$WORKSPACE/.env.tmp"
+  mv "$WORKSPACE/.env.tmp" "$WORKSPACE/.env"
+  export GOOGLE_SHEETS_TAB_NAME
+  echo "Sheet tab (from Jenkins): ${GOOGLE_SHEETS_TAB_NAME}"
+else
+  echo "Sheet tab: using GOOGLE_SHEETS_TAB_NAME from secrets .env"
+fi
+
 cp "$SECRETS_DIR/client-secret.json" "$WORKSPACE/client-secret.json"
 if [[ -f "$SECRETS_DIR/.google-sheets-token.json" ]]; then
   cp "$SECRETS_DIR/.google-sheets-token.json" "$WORKSPACE/.google-sheets-token.json"

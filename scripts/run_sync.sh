@@ -3,6 +3,7 @@
 # Usage:
 #   ./scripts/run_sync.sh       # uses JIRA_JQL from .env as-is
 #   ./scripts/run_sync.sh 7     # override created >= -7d in JIRA_JQL
+#   GOOGLE_SHEETS_TAB_NAME="My Tab" ./scripts/run_sync.sh 7   # local override
 
 set -euo pipefail
 
@@ -20,6 +21,11 @@ fi
 export PYTHONPATH="$SCRIPT_DIR/.vendor${PYTHONPATH:+:$PYTHONPATH}"
 
 DAYS="${1:-}"
+SHEET_TAB_ARGS=()
+if [[ -n "${GOOGLE_SHEETS_TAB_NAME:-}" ]]; then
+  SHEET_TAB_ARGS=(--sheet-tab "$GOOGLE_SHEETS_TAB_NAME")
+fi
+
 LOG_FILE="$SCRIPT_DIR/logs/sync-$(date +%Y%m%d-%H%M%S).log"
 if ! touch "$LOG_FILE" 2>/dev/null; then
   LOG_FILE="/tmp/jira-sheet-sync-$(date +%Y%m%d-%H%M%S).log"
@@ -31,9 +37,9 @@ set +o pipefail
   echo "=== sync started at $(date -Iseconds) ==="
   if [[ -n "$DAYS" ]]; then
     echo "Days window: -${DAYS}d"
-    "$PYTHON" sync.py --days "$DAYS"
+    "$PYTHON" sync.py --days "$DAYS" "${SHEET_TAB_ARGS[@]}"
   else
-    "$PYTHON" sync.py
+    "$PYTHON" sync.py "${SHEET_TAB_ARGS[@]}"
   fi
   echo "=== sync finished at $(date -Iseconds) ==="
 } 2>&1 | tee "$LOG_FILE"

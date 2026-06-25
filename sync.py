@@ -99,6 +99,38 @@ def sheet_tab_title(range_a1: str) -> str | None:
     return None
 
 
+def sheet_range_columns(range_a1: str) -> str:
+    """Column part of an A1 range (e.g. A:H from JIRA_Sheet!A:H)."""
+    range_a1 = range_a1.strip()
+    if "!" in range_a1:
+        return range_a1.split("!", 1)[1].strip()
+    return range_a1
+
+
+def resolve_sheet_range(tab_name: str = "") -> str:
+    """Build the full A1 range from tab name and GOOGLE_SHEETS_RANGE."""
+    tab_name = tab_name.strip()
+    range_env = os.environ.get("GOOGLE_SHEETS_RANGE", "A:H").strip()
+    if tab_name:
+        return f"{tab_name}!{sheet_range_columns(range_env)}"
+    return range_env
+
+
+def ensure_sheet_tab_exists(service: Any, spreadsheet_id: str, tab_title: str) -> bool:
+    """Create worksheet tab if missing. Returns True when a new tab was created."""
+    meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    for sheet in meta.get("sheets") or []:
+        props = sheet.get("properties") or {}
+        if props.get("title") == tab_title:
+            return False
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": [{"addSheet": {"properties": {"title": tab_title}}}]},
+    ).execute()
+    print(f"Created sheet tab: {tab_title}")
+    return True
+
+
 def split_sheet_tab_and_cell(range_a1: str, cell: str) -> str:
     """Build range_a1 for cell (e.g. A1) on the same tab as range_a1."""
     range_a1 = range_a1.strip()
@@ -605,6 +637,8 @@ def apply_jql_created_days(jql: str, days: int) -> str:
 
 
 def main() -> None:
+    # Jenkins job parameters are injected before Python starts; capture before .env load.
+    sheet_tab_from_job = os.environ.get("GOOGLE_SHEETS_TAB_NAME", "").strip()
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="Sync JIRA release tickets to Google Sheets.")
@@ -614,12 +648,24 @@ def main() -> None:
         metavar="N",
         help="Override JIRA_JQL created >= -Nd (e.g. 4 for Monday, 3 for Thursday).",
     )
+    parser.add_argument(
+        "--sheet-tab",
+        default="",
+        help="Worksheet tab name (Jenkins job parameter; overrides GOOGLE_SHEETS_TAB_NAME in .env).",
+    )
     args = parser.parse_args()
 
     base_url = _require_env("JIRA_BASE_URL")
     email = _require_env("JIRA_EMAIL")
     token = _require_env("JIRA_API_TOKEN")
-    sheet_range = os.environ.get("GOOGLE_SHEETS_RANGE", "A:H").strip()
+    sheet_tab_name = (
+        args.sheet_tab.strip()
+        or sheet_tab_from_job
+        or os.environ.get("GOOGLE_SHEETS_TAB_NAME", "").strip()
+    )
+    sheet_range = resolve_sheet_range(sheet_tab_name)
+    if sheet_tab_name:
+        print(f"Sheet tab: {sheet_tab_name}")
 
     default_jql = (
         f'updated >= "{(datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")}" '
@@ -667,6 +713,8 @@ def main() -> None:
     sheet_id = _require_env("GOOGLE_SHEETS_SPREADSHEET_ID")
     creds = load_google_sheets_credentials()
     service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    if sheet_tab_name:
+        ensure_sheet_tab_exists(service, sheet_id, sheet_tab_name)
     last_sno = sheet_last_serial_number(service, sheet_id, sheet_range)
     rows = [[last_sno + i, *row] for i, row in enumerate(rows, start=1)]
 
