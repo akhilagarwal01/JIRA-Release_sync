@@ -2,7 +2,7 @@
 # Run sync.py (used by Jenkins weekly job).
 # Usage:
 #   ./scripts/run_sync.sh       # uses JIRA_JQL from .env as-is
-#   ./scripts/run_sync.sh 7     # override created >= -7d in JIRA_JQL
+#   ./scripts/run_sync.sh 7     # override updated/created >= -7d in JIRA_JQL
 #   GOOGLE_SHEETS_TAB_NAME="My Tab" ./scripts/run_sync.sh 7   # local override
 
 set -euo pipefail

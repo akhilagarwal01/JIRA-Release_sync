@@ -796,19 +796,34 @@ def append_to_sheet(
         print(f"Appended {len(values)} data row(s) to the sheet.")
 
 
-def apply_jql_created_days(jql: str, days: int) -> str:
-    """Replace or insert created >= -Nd in JIRA_JQL (used by Jenkins / run_sync.sh)."""
-    pattern = re.compile(r"created\s*>=\s*-\d+d", re.IGNORECASE)
-    replacement = f"created >= -{days}d"
-    if pattern.search(jql):
-        return pattern.sub(replacement, jql)
+def apply_jql_lookback_days(jql: str, days: int) -> tuple[str, str]:
+    """
+    Replace updated >= -Nd or created >= -Nd in JIRA_JQL (Jenkins / run_sync.sh).
+    Prefers updated when present; otherwise created; otherwise adds updated.
+    Returns (new_jql, field_name).
+    """
+    replacement = f"-{days}d"
+    updated_pattern = re.compile(r"updated\s*>=\s*-\d+d", re.IGNORECASE)
+    if updated_pattern.search(jql):
+        return updated_pattern.sub(f"updated >= {replacement}", jql), "updated"
 
+    created_pattern = re.compile(r"created\s*>=\s*-\d+d", re.IGNORECASE)
+    if created_pattern.search(jql):
+        return created_pattern.sub(f"created >= {replacement}", jql), "created"
+
+    clause = f"updated >= {replacement}"
     order_by = re.search(r"\border\s+by\b", jql, re.IGNORECASE)
     if order_by:
         before = jql[: order_by.start()].rstrip()
         after = jql[order_by.start() :].lstrip()
-        return f"{before}\nAND {replacement}\n{after}"
-    return f"{jql.rstrip()}\nAND {replacement}"
+        return f"{before}\nAND {clause}\n{after}", "updated"
+    return f"{jql.rstrip()}\nAND {clause}", "updated"
+
+
+def apply_jql_created_days(jql: str, days: int) -> str:
+    """Backward-compatible wrapper; prefer apply_jql_lookback_days."""
+    new_jql, _ = apply_jql_lookback_days(jql, days)
+    return new_jql
 
 
 def main() -> None:
@@ -821,7 +836,7 @@ def main() -> None:
         "--days",
         type=int,
         metavar="N",
-        help="Override JIRA_JQL created >= -Nd (e.g. 4 for Monday, 3 for Thursday).",
+        help="Override JIRA_JQL updated/created >= -Nd (e.g. 4 for Monday, 3 for Thursday).",
     )
     parser.add_argument(
         "--sheet-tab",
@@ -854,8 +869,8 @@ def main() -> None:
         if env_days.isdigit():
             days = int(env_days)
     if days is not None:
-        jql = apply_jql_created_days(jql, days)
-        print(f"Using JQL with created >= -{days}d")
+        jql, lookback_field = apply_jql_lookback_days(jql, days)
+        print(f"Using JQL with {lookback_field} >= -{days}d")
 
     env_lookback = os.environ.get("JIRA_COMMENT_LOOKBACK_DAYS", "").strip()
     default_lookback = int(env_lookback) if env_lookback.isdigit() else 7

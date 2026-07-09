@@ -8,7 +8,7 @@
 #
 # Optional env (Jenkins job parameters):
 #   GOOGLE_SHEETS_TAB_NAME    override worksheet tab; falls back to secrets .env if unset
-#   JIRA_SYNC_DAYS=7            override JQL created >= -Nd window
+#   JIRA_SYNC_DAYS=7            override JQL updated/created >= -Nd window
 #   JIRA_SYNC_SECRETS_DIR       default: /opt/jira-sheet-sync-secrets
 
 set -euo pipefail

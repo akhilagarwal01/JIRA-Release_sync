@@ -197,12 +197,19 @@ def release_date_from_comments(
     return yyyy_mm_dd_to_dd_mm_yyyy(iso_to_yyyy_mm_dd(fallback_iso))
 
 
+def parse_linked_task_types(task_type: str) -> set[str]:
+    """Comma-separated issue types, e.g. Task,Story (default: Task)."""
+    raw = (task_type or "Task").strip()
+    parts = {p.strip().lower() for p in raw.split(",") if p.strip()}
+    return parts or {"task"}
+
+
 def linked_tasks(
     fields: dict[str, Any],
     task_type: str,
 ) -> list[tuple[str, str]]:
-    """List of (ticket key, summary) for linked issues of the given type (e.g. Task)."""
-    want = task_type.strip().lower()
+    """List of (ticket key, summary) for linked issues of the given type(s)."""
+    want_types = parse_linked_task_types(task_type)
     rows: list[tuple[str, str]] = []
     seen: set[str] = set()
 
@@ -215,7 +222,7 @@ def linked_tasks(
                 continue
             inner = side.get("fields") or {}
             itype = (inner.get("issuetype") or {}).get("name") or ""
-            if itype.strip().lower() != want:
+            if itype.strip().lower() not in want_types:
                 continue
             summary = (inner.get("summary") or "").strip()
             seen.add(key)
@@ -515,6 +522,11 @@ def main() -> None:
         help='e.g. "New Release" or "Patch"',
     )
     parser.add_argument(
+        "--linked-type",
+        default=os.environ.get("JIRA_LINKED_TASK_TYPE", "Task"),
+        help="Linked issue type(s) for Features table (comma-separated, e.g. Task,Story)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the email body only; do not create a Gmail draft",
@@ -534,7 +546,7 @@ def main() -> None:
         "JIRA_RELEASE_COMMENT_PREFIX",
         "Release has been completed  for",
     ).strip()
-    linked_type = os.environ.get("JIRA_LINKED_TASK_TYPE", "Task").strip()
+    linked_type = args.linked_type.strip()
 
     issue = fetch_release_issue(base_url, email, api_token, issue_key)
     fields = issue.get("fields") or {}
@@ -547,6 +559,14 @@ def main() -> None:
         fields.get("updated") or "",
     )
     features = linked_tasks(fields, linked_type)
+    if not features:
+        link_count = len(fields.get("issuelinks") or [])
+        if link_count:
+            print(
+                f"No linked tickets matched type(s) {linked_type!r} "
+                f"({link_count} link(s) on issue; check JIRA_LINKED_TASK_TYPE).",
+                file=sys.stderr,
+            )
 
     service_name = args.service.strip()
     release_type = args.release_type.strip()
