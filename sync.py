@@ -53,6 +53,14 @@ def _require_env(name: str) -> str:
     return value
 
 
+def parse_env_csv(name: str) -> list[str]:
+    """Comma-separated env values (account IDs, project substrings, etc.)."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
 def adf_to_plain_text(node: Any) -> str:
     """JIRA Cloud stores rich text (e.g. comments) as Atlassian Document Format."""
     if node is None:
@@ -319,6 +327,7 @@ def jira_search_issues(
         "summary",
         "status",
         "updated",
+        "creator",
         "reporter",
         "issuelinks",
     ]
@@ -417,6 +426,166 @@ def saathi_release_calendar_days_newest_first(
         if day:
             days.add(day)
     return sorted(days, reverse=True)
+
+
+def comment_author_name(comment: dict[str, Any]) -> str:
+    return ((comment.get("author") or {}).get("displayName") or "").strip()
+
+
+def comment_plain_text(comment: dict[str, Any]) -> str:
+    return normalize_spaces(adf_to_plain_text(comment.get("body")))
+
+
+def parse_comment_created(comment: dict[str, Any]) -> datetime | None:
+    """Parse JIRA comment created timestamp (ISO-8601)."""
+    raw = (comment.get("created") or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = f"{raw[:-1]}+00:00"
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def jql_updated_lookback_start(jql: str, default_days: int = 7) -> datetime:
+    """Start of the updated window from JQL (matches updated >= -Nd or YYYY-MM-DD)."""
+    relative = re.search(r"updated\s*>=\s*-(\d+)d", jql, re.IGNORECASE)
+    if relative:
+        days = int(relative.group(1))
+        return datetime.now(timezone.utc) - timedelta(days=days)
+
+    absolute = re.search(
+        r'updated\s*>=\s*"(\d{4}-\d{2}-\d{2})"',
+        jql,
+        re.IGNORECASE,
+    )
+    if absolute:
+        return datetime.strptime(absolute.group(1), "%Y-%m-%d").replace(
+            tzinfo=timezone.utc,
+        )
+
+    return datetime.now(timezone.utc) - timedelta(days=default_days)
+
+
+def comments_since(
+    comments: list[dict[str, Any]],
+    since: datetime,
+) -> list[dict[str, Any]]:
+    """Comments created on or after since (same window as JQL updated >=)."""
+    out: list[dict[str, Any]] = []
+    for comment in comments:
+        created = parse_comment_created(comment)
+        if created is None:
+            continue
+        if created.astimezone(timezone.utc) >= since.astimezone(timezone.utc):
+            out.append(comment)
+    return out
+
+
+def is_matching_release_comment(
+    comment: dict[str, Any],
+    author_display_name: str,
+    text_prefix: str,
+) -> bool:
+    want_author = (author_display_name or "").strip()
+    want_prefix = normalize_spaces(text_prefix).lower()
+    if comment_author_name(comment) != want_author:
+        return False
+    return comment_plain_text(comment).lower().startswith(want_prefix)
+
+
+def is_matching_automation_comment(
+    comment: dict[str, Any],
+    author_display_name: str,
+    text_prefix: str,
+) -> bool:
+    want_author = (author_display_name or "").strip()
+    want_prefix = normalize_spaces(text_prefix).lower()
+    if comment_author_name(comment) != want_author:
+        return False
+    return comment_plain_text(comment).lower().startswith(want_prefix)
+
+
+def skip_automation_only_in_updated_window(
+    comments: list[dict[str, Any]],
+    lookback_start: datetime,
+    release_author: str,
+    release_prefix: str,
+    automation_author: str,
+    automation_prefix: str,
+) -> bool:
+    """
+    Skip when the ticket was picked up by updated >= -Nd but comments in that
+    window include Automation's Deployed message and no Saathi release comment.
+    """
+    if not comments or not (automation_author or "").strip():
+        return False
+
+    in_window = comments_since(comments, lookback_start)
+    if not in_window:
+        return False
+
+    has_automation = any(
+        is_matching_automation_comment(c, automation_author, automation_prefix)
+        for c in in_window
+    )
+    if not has_automation:
+        return False
+
+    has_saathi = any(
+        is_matching_release_comment(c, release_author, release_prefix)
+        for c in in_window
+    )
+    return not has_saathi
+
+
+def linked_issue_project_prefix(issue_key: str) -> str:
+    """Project key from issue key (e.g. CORE from CORE-123)."""
+    key = (issue_key or "").strip().upper()
+    if not key:
+        return ""
+    return key.split("-", 1)[0]
+
+
+def linked_issue_matches_project_substrings(
+    fields: dict[str, Any],
+    project_substrings: tuple[str, ...],
+) -> bool:
+    """True when any linked issue key/project contains one of the substrings."""
+    if not project_substrings:
+        return False
+    want = tuple(s.upper() for s in project_substrings)
+    for link in fields.get("issuelinks") or []:
+        for linked in (link.get("inwardIssue"), link.get("outwardIssue")):
+            if not linked:
+                continue
+            key = (linked.get("key") or "").strip().upper()
+            if not key:
+                continue
+            project = linked_issue_project_prefix(key)
+            if any(sub in project or sub in key for sub in want):
+                return True
+    return False
+
+
+def release_issue_passes_creator_link_filter(
+    issue: dict[str, Any],
+    filter_creators: frozenset[str],
+    filter_projects: tuple[str, ...],
+) -> bool:
+    """
+    For creators in filter_creators, require a linked issue whose project/key
+    matches filter_projects. All other creators pass through unchanged.
+    """
+    if not filter_creators or not filter_projects:
+        return True
+    fields = issue.get("fields") or {}
+    creator_id = ((fields.get("creator") or {}).get("accountId") or "").strip()
+    if creator_id not in filter_creators:
+        return True
+    return linked_issue_matches_project_substrings(fields, filter_projects)
 
 
 def linked_tasks_column(fields: dict[str, Any], task_type_name: str) -> str:
@@ -628,11 +797,17 @@ def append_to_sheet(
 
 
 def apply_jql_created_days(jql: str, days: int) -> str:
-    """Replace created >= -Nd in JIRA_JQL (used by Jenkins / run_sync.sh)."""
+    """Replace or insert created >= -Nd in JIRA_JQL (used by Jenkins / run_sync.sh)."""
     pattern = re.compile(r"created\s*>=\s*-\d+d", re.IGNORECASE)
     replacement = f"created >= -{days}d"
     if pattern.search(jql):
         return pattern.sub(replacement, jql)
+
+    order_by = re.search(r"\border\s+by\b", jql, re.IGNORECASE)
+    if order_by:
+        before = jql[: order_by.start()].rstrip()
+        after = jql[order_by.start() :].lstrip()
+        return f"{before}\nAND {replacement}\n{after}"
     return f"{jql.rstrip()}\nAND {replacement}"
 
 
@@ -682,18 +857,71 @@ def main() -> None:
         jql = apply_jql_created_days(jql, days)
         print(f"Using JQL with created >= -{days}d")
 
+    env_lookback = os.environ.get("JIRA_COMMENT_LOOKBACK_DAYS", "").strip()
+    default_lookback = int(env_lookback) if env_lookback.isdigit() else 7
+    comment_lookback_start = jql_updated_lookback_start(jql, default_days=default_lookback)
+
     release_author = os.environ.get("JIRA_RELEASE_COMMENT_AUTHOR", "Saathi").strip()
     release_prefix = os.environ.get(
         "JIRA_RELEASE_COMMENT_PREFIX",
         "Release has been completed  for",
     ).strip()
     linked_task_type = os.environ.get("JIRA_LINKED_TASK_TYPE", "Task").strip()
+    automation_author = (
+        os.environ.get("JIRA_DEPLOYED_AUTOMATION_COMMENT_AUTHOR", "").strip()
+        or "Automation for Jira"
+    )
+    automation_prefix = (
+        os.environ.get("JIRA_DEPLOYED_AUTOMATION_COMMENT_PREFIX", "").strip()
+        or "Ticket Automation Executed. Your ticket has been marked as"
+    )
+
+    filter_creators = frozenset(parse_env_csv("JIRA_RELEASE_LINK_FILTER_CREATORS"))
+    filter_projects = tuple(parse_env_csv("JIRA_RELEASE_LINK_FILTER_PROJECTS"))
+    if filter_creators and filter_projects:
+        print(
+            "Creator link filter: "
+            f"{len(filter_creators)} creator(s), projects {', '.join(filter_projects)}"
+        )
+    if automation_author:
+        print(
+            "Automation comment filter: skip when updated-window has "
+            f"{automation_author!r} Deployed comment but no Saathi release comment "
+            f"(window from JQL updated >=, since {comment_lookback_start.date()})",
+        )
 
     issues = dedupe_issues_by_key(jira_search_issues(base_url, email, token, jql=jql))
     rows: list[list[str]] = []
+    skipped_by_filter = 0
+    skipped_stale_deployed = 0
     for issue in issues:
         key = (issue.get("key") or "").strip()
+        if not release_issue_passes_creator_link_filter(
+            issue,
+            filter_creators,
+            filter_projects,
+        ):
+            print(
+                f"Skipped {key}: creator requires linked project "
+                f"matching {', '.join(filter_projects)}",
+            )
+            skipped_by_filter += 1
+            continue
         comments = jira_get_issue_comments(base_url, email, token, key) if key else []
+        if skip_automation_only_in_updated_window(
+            comments,
+            comment_lookback_start,
+            release_author,
+            release_prefix,
+            automation_author,
+            automation_prefix,
+        ):
+            print(
+                f"Skipped {key}: updated window has Automation Deployed comment only "
+                "(no Saathi release comment in same window)",
+            )
+            skipped_stale_deployed += 1
+            continue
         rows.extend(
             issue_to_rows(
                 issue,
@@ -704,8 +932,19 @@ def main() -> None:
             ),
         )
 
+    if skipped_by_filter:
+        print(f"Skipped {skipped_by_filter} release ticket(s) (creator linked-project filter).")
+    if skipped_stale_deployed:
+        print(
+            f"Skipped {skipped_stale_deployed} release ticket(s) "
+            "(Automation-only comment in updated window).",
+        )
+
     if not rows:
-        print("No issues returned for the current JQL.")
+        if skipped_by_filter or skipped_stale_deployed:
+            print("No issues to write after filters.")
+        else:
+            print("No issues returned for the current JQL.")
         return
 
     rows.sort(key=lambda r: r[0])
