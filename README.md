@@ -46,6 +46,31 @@ python sync.py
 
 Use cron or GitHub Actions to run on a schedule.
 
+### Daily task log (local Excel)
+
+`daily_task_log.py` appends COR/LINUX and DEVOPS release work to `DailyTaskLogs.xlsx`:
+
+- **COR / LINUX** — tickets you moved from **In QA** → **UAT/Staging**
+- **DEVOPS** — release tickets using the same filters as `sync.py` (JIRA_JQL, Saathi comments, creator link filter)
+- **Weekdays only** — Monday looks back **3 days**; Tuesday–Friday looks back **1 day**
+- **Sheet tab** — current quarter (e.g. `Jul-Sept 26`)
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+python daily_task_log.py              # weekday lookback
+python daily_task_log.py --dry-run    # preview without writing
+bash scripts/run_daily_task_log.sh    # same, with logging
+```
+
+Optional env: `DAILY_TASK_LOG_WORKBOOK`, `DAILY_TASK_LOG_JQL`, `DAILY_TASK_LOG_ONLY_MY_TRANSITIONS`, `DAILY_TASK_LOG_QA_*` (see `.env.example`).
+
+Example cron (weekdays 6 PM):
+
+```
+0 18 * * 1-5 cd /home/akhilagarwal/Documents/jira-sheet-sync && bash scripts/run_daily_task_log.sh
+```
+
 ## License
 
 MIT

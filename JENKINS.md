@@ -353,8 +353,11 @@ Local Jenkins only runs when the machine is awake at the scheduled time.
 | Script | Purpose |
 |--------|---------|
 | `scripts/jenkins_build.sh` | Jenkins entry point (Git checkout + secrets + sync) |
+| `scripts/jenkins_daily_task_log.sh` | Jenkins entry point for daily Excel task log |
 | `scripts/run_sync.sh` | Runs `sync.py`, optional `--days` via argument |
+| `scripts/run_daily_task_log.sh` | Runs `daily_task_log.py` (weekday lookback automatic) |
 | `sync.py` | Main JIRA → Sheet sync |
+| `daily_task_log.py` | JIRA → local DailyTaskLogs.xlsx |
 
 ---
 
@@ -376,3 +379,72 @@ git pull
 ```
 
 For team use, the **Git + `$WORKSPACE`** approach in §5 is recommended so everyone runs the same pipeline from the repo.
+
+---
+
+## 11. Jenkins job — Daily task log (Excel)
+
+Local **DailyTaskLogs.xlsx** update on **Monday–Friday**. Lookback is automatic inside `daily_task_log.py`:
+
+| Day | Lookback |
+|-----|----------|
+| Monday | Last **3** days (covers the weekend) |
+| Tue–Fri | Last **1** day |
+
+### What this job does
+
+| Item | Detail |
+|------|--------|
+| Script | `daily_task_log.py` via `scripts/jenkins_daily_task_log.sh` |
+| Schedule | **Mon–Fri ~6:00 PM** (`H 18 * * 1-5`) |
+| JQL | `DAILY_TASK_LOG_JQL` in secrets `.env` (separate from `JIRA_JQL`) |
+| Output | Appends to `DAILY_TASK_LOG_WORKBOOK` (local `.xlsx`) |
+
+### Secrets `.env` entries (in addition to JIRA creds)
+
+```env
+DAILY_TASK_LOG_WORKBOOK=/home/akhilagarwal/Documents/jira-sheet-sync/DailyTaskLogs.xlsx
+DAILY_TASK_LOG_JQL=project = DEVOPS AND updated >= -1d ...
+DAILY_TASK_LOG_QA_FROM_STATUS=Deployed on dev-int
+DAILY_TASK_LOG_QA_TO_STATUSES=Deployed on-FT,QA Signed OFF
+```
+
+Google OAuth is **not** required for this job.
+
+### Create the Jenkins job
+
+1. **New Item** → name: `JIRA-Daily-Task-Log` → **Freestyle project**
+2. **Source Code Management** → Git (same repo as sync job), branch `*/master`
+3. **Build Triggers** → **Build periodically**:
+
+```
+H 18 * * 1-5
+```
+
+4. **Build Steps** → **Execute shell**:
+
+```bash
+bash "$WORKSPACE/scripts/jenkins_daily_task_log.sh"
+```
+
+**Local path (no Git in Jenkins):**
+
+```bash
+bash /home/akhilagarwal/Documents/jira-sheet-sync/scripts/jenkins_daily_task_log.sh
+```
+
+### Manual test
+
+```bash
+bash scripts/run_daily_task_log.sh
+python3 daily_task_log.py --dry-run
+```
+
+### DEVOPS QA column
+
+For each DEVOPS release row, the script checks that **you** did **at least one** of:
+
+1. Commented on the ticket, **or**
+2. Moved status from `DAILY_TASK_LOG_QA_FROM_STATUS` to one of `DAILY_TASK_LOG_QA_TO_STATUSES`
+
+If **both** are missing, column **QA Check** is set to `QA done by Peer` / `No QA done` (configurable via `DAILY_TASK_LOG_QA_MISSING_NOTE`).

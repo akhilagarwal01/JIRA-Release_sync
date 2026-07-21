@@ -129,7 +129,7 @@ def fetch_release_issue(
     issue_key: str,
 ) -> dict[str, Any]:
     """Load one issue with fields we need for the email."""
-    fields = "summary,status,updated,issuetype,issuelinks"
+    fields = "summary,status,updated,issuetype,issuelinks,creator"
     return jira_get(
         base_url,
         email,
@@ -137,6 +137,23 @@ def fetch_release_issue(
         f"/rest/api/3/issue/{issue_key}",
         params={"fields": fields},
     )
+
+
+def fetch_issue_reporter(
+    base_url: str,
+    email: str,
+    token: str,
+    issue_key: str,
+) -> dict[str, Any] | None:
+    """Reporter user object for a linked issue."""
+    data = jira_get(
+        base_url,
+        email,
+        token,
+        f"/rest/api/3/issue/{issue_key}",
+        params={"fields": "reporter"},
+    )
+    return (data.get("fields") or {}).get("reporter")
 
 
 def fetch_all_comments(
@@ -229,6 +246,70 @@ def linked_tasks(
             rows.append((key, summary))
 
     return rows
+
+
+def user_email_address(user: dict[str, Any] | None) -> str:
+    return ((user or {}).get("emailAddress") or "").strip()
+
+
+def same_jira_user(
+    left: dict[str, Any] | None,
+    right: dict[str, Any] | None,
+) -> bool:
+    """True when two JIRA user objects refer to the same person."""
+    if not left or not right:
+        return False
+    left_id = (left.get("accountId") or "").strip()
+    right_id = (right.get("accountId") or "").strip()
+    if left_id and right_id and left_id == right_id:
+        return True
+    left_email = user_email_address(left).lower()
+    right_email = user_email_address(right).lower()
+    return bool(left_email and right_email and left_email == right_email)
+
+
+def format_to_recipient(user: dict[str, Any]) -> str:
+    """Gmail To entry: prefer Display Name <email>."""
+    address = user_email_address(user)
+    if not address:
+        return ""
+    name = ((user or {}).get("displayName") or "").strip()
+    if name:
+        return f"{name} <{address}>"
+    return address
+
+
+def build_draft_to_recipients(
+    devops_creator: dict[str, Any] | None,
+    linked_issue_keys: list[str],
+    base_url: str,
+    email: str,
+    token: str,
+) -> str:
+    """
+    core-release DL + linked-ticket reporters (by email).
+    Skip a linked reporter when they are the same person as the DEVOPS creator
+    (core-release DL already includes them).
+    """
+    recipients: list[str] = [DRAFT_TO_DL, DRAFT_TO_PLACEHOLDER]
+    seen_emails: set[str] = set()
+
+    for issue_key in linked_issue_keys:
+        reporter = fetch_issue_reporter(base_url, email, token, issue_key)
+        if not reporter:
+            continue
+        if same_jira_user(reporter, devops_creator):
+            continue
+        address = user_email_address(reporter).lower()
+        if not address or address in seen_emails:
+            continue
+        formatted = format_to_recipient(reporter)
+        if not formatted:
+            continue
+        seen_emails.add(address)
+        recipients.append(formatted)
+
+    return ", ".join(recipients)
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +492,9 @@ def build_email_subject(service_name: str, release_date_dd_mm_yyyy: str) -> str:
 
 # Real distro + placeholder recipient. Gmail API rejects bare "xxx" in To; use a
 # syntactically valid but undeliverable address so send fails until you remove it.
-DRAFT_TO_RECIPIENTS = "core-release@paisabazaar.com, xxx@example.invalid"
+DRAFT_TO_DL = "core-release@paisabazaar.com"
+DRAFT_TO_PLACEHOLDER = "xxx@example.invalid"
+DRAFT_TO_RECIPIENTS = f"{DRAFT_TO_DL}, {DRAFT_TO_PLACEHOLDER}"
 
 
 def gmail_credentials() -> UserCredentials:
@@ -470,6 +553,7 @@ def create_gmail_draft(
     subject: str,
     html_body: str,
     plain_body: str,
+    to_recipients: str,
 ) -> str:
     """Create a draft in the user's Gmail; return draft id."""
     service = gmail_service
@@ -478,7 +562,7 @@ def create_gmail_draft(
     message.attach(MIMEText(plain_body, "plain", "utf-8"))
     message.attach(MIMEText(html_body, "html", "utf-8"))
     message["Subject"] = subject
-    message["To"] = DRAFT_TO_RECIPIENTS
+    message["To"] = to_recipients
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     draft = (
@@ -559,6 +643,14 @@ def main() -> None:
         fields.get("updated") or "",
     )
     features = linked_tasks(fields, linked_type)
+    devops_creator = fields.get("creator")
+    to_recipients = build_draft_to_recipients(
+        devops_creator,
+        [key for key, _ in features],
+        base_url,
+        email,
+        api_token,
+    )
     if not features:
         link_count = len(fields.get("issuelinks") or [])
         if link_count:
@@ -618,6 +710,7 @@ def main() -> None:
     with open(preview_path, "w", encoding="utf-8") as f:
         f.write(html_body)
     print(f"Subject: {subject}")
+    print(f"To: {to_recipients}")
     print(f"HTML preview saved: {preview_path}")
     print("---")
 
@@ -628,7 +721,13 @@ def main() -> None:
     if not gmail_service:
         print("Cannot create draft without Gmail authentication.", file=sys.stderr)
         sys.exit(1)
-    draft_id = create_gmail_draft(gmail_service, subject, html_body, plain_body)
+    draft_id = create_gmail_draft(
+        gmail_service,
+        subject,
+        html_body,
+        plain_body,
+        to_recipients,
+    )
     print(f"Gmail draft created (id: {draft_id}). Open Gmail → Drafts to review and send.")
 
 

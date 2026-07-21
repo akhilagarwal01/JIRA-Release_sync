@@ -9,3 +9,4 @@ __pycache__/
 release_draft_preview.html
 logs/
 .vendor/
+DailyTaskLogs.xlsx
