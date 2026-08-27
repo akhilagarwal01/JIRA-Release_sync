@@ -588,9 +588,16 @@ def release_issue_passes_creator_link_filter(
     return linked_issue_matches_project_substrings(fields, filter_projects)
 
 
+def parse_linked_task_types(task_type: str) -> set[str]:
+    """Comma-separated issue types, e.g. Task,Story (default: Task)."""
+    raw = (task_type or "Task").strip()
+    parts = {p.strip().lower() for p in raw.split(",") if p.strip()}
+    return parts or {"task"}
+
+
 def linked_tasks_column(fields: dict[str, Any], task_type_name: str) -> str:
     """Linked issues whose type name matches (default Task): 'KEY - summary' per line."""
-    want = (task_type_name or "Task").strip().lower()
+    want_types = parse_linked_task_types(task_type_name)
     parts: list[str] = []
     seen: set[str] = set()
     for link in fields.get("issuelinks") or []:
@@ -602,7 +609,7 @@ def linked_tasks_column(fields: dict[str, Any], task_type_name: str) -> str:
                 continue
             inner = linked.get("fields") or {}
             itype = (inner.get("issuetype") or {}).get("name") or ""
-            if itype.strip().lower() != want:
+            if itype.strip().lower() not in want_types:
                 continue
             summ = (inner.get("summary") or "").strip()
             seen.add(lk)
