@@ -34,7 +34,7 @@ if [[ -n "${GOOGLE_SHEETS_TAB_NAME:-}" ]]; then
   export GOOGLE_SHEETS_TAB_NAME
   echo "Sheet tab (from Jenkins): ${GOOGLE_SHEETS_TAB_NAME}"
 else
-  echo "Sheet tab: using GOOGLE_SHEETS_TAB_NAME from secrets .env"
+  echo "Sheet tab: auto bimonthly (GOOGLE_SHEETS_TAB_NAME not set)"
 fi
 
 cp "$SECRETS_DIR/client-secret.json" "$WORKSPACE/client-secret.json"

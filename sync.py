@@ -124,6 +124,38 @@ def resolve_sheet_range(tab_name: str = "") -> str:
     return range_env
 
 
+def bimonthly_sheet_tab_name(when: datetime | None = None) -> str:
+    """
+    Two-month tab label from the run date, e.g. Jul-Aug 26, Sep-Oct 26.
+    Pairs: Jan-Feb, Mar-Apr, May-Jun, Jul-Aug, Sep-Oct, Nov-Dec.
+    """
+    when = when or datetime.now()
+    start_month = ((when.month - 1) // 2) * 2 + 1
+    end_month = start_month + 1
+    start_abbr = datetime(when.year, start_month, 1).strftime("%b")
+    end_abbr = datetime(when.year, end_month, 1).strftime("%b")
+    return f"{start_abbr}-{end_abbr} {when.year % 100:02d}"
+
+
+def resolve_sheet_tab_name(
+    *,
+    cli_tab: str = "",
+    env_tab_from_job: str = "",
+    env_tab_from_dotenv: str = "",
+) -> tuple[str, str]:
+    """
+    Pick worksheet tab name. Returns (tab_name, source) where source is
+    'cli', 'jenkins', 'env', or 'auto'.
+    """
+    if cli_tab.strip():
+        return cli_tab.strip(), "cli"
+    if env_tab_from_job.strip():
+        return env_tab_from_job.strip(), "jenkins"
+    if env_tab_from_dotenv.strip():
+        return env_tab_from_dotenv.strip(), "env"
+    return bimonthly_sheet_tab_name(), "auto"
+
+
 def ensure_sheet_tab_exists(service: Any, spreadsheet_id: str, tab_title: str) -> bool:
     """Create worksheet tab if missing. Returns True when a new tab was created."""
     meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
@@ -855,14 +887,17 @@ def main() -> None:
     base_url = _require_env("JIRA_BASE_URL")
     email = _require_env("JIRA_EMAIL")
     token = _require_env("JIRA_API_TOKEN")
-    sheet_tab_name = (
-        args.sheet_tab.strip()
-        or sheet_tab_from_job
-        or os.environ.get("GOOGLE_SHEETS_TAB_NAME", "").strip()
+    sheet_tab_name, sheet_tab_source = resolve_sheet_tab_name(
+        cli_tab=args.sheet_tab,
+        env_tab_from_job=sheet_tab_from_job,
+        env_tab_from_dotenv=os.environ.get("GOOGLE_SHEETS_TAB_NAME", "").strip(),
     )
     sheet_range = resolve_sheet_range(sheet_tab_name)
     if sheet_tab_name:
-        print(f"Sheet tab: {sheet_tab_name}")
+        if sheet_tab_source == "auto":
+            print(f"Sheet tab (auto bimonthly): {sheet_tab_name}")
+        else:
+            print(f"Sheet tab: {sheet_tab_name}")
 
     default_jql = (
         f'updated >= "{(datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")}" '
