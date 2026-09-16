@@ -21,7 +21,8 @@ set -euo pipefail
 
 WORKSPACE="${WORKSPACE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SECRETS_DIR="${JIRA_SYNC_SECRETS_DIR:-/opt/jira-sheet-sync-secrets}"
-MARKER_FILE="$SECRETS_DIR/.daily_task_log_last_success"
+# Marker lives in the shared repo workspace (Jenkins/SYSTEM can write here).
+MARKER_FILE="$WORKSPACE/.daily_task_log_last_success"
 JENKINS_URL="${JENKINS_URL:-http://localhost:8080}"
 
 cd "$WORKSPACE"

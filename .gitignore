@@ -10,3 +10,4 @@ release_draft_preview.html
 logs/
 .vendor/
 DailyTaskLogs.xlsx
+.daily_task_log_last_success

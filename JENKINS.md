@@ -413,7 +413,7 @@ Example: last success **Tuesday**, you are on leave Wed–Thu, job runs **Friday
 Sources (in order):
 
 1. Jenkins API — `lastSuccessfulBuild/buildTimestamp` for this job (`JOB_NAME` is set automatically)
-2. Fallback marker file — `$JIRA_SYNC_SECRETS_DIR/.daily_task_log_last_success`
+2. Fallback marker file — `$WORKSPACE/.daily_task_log_last_success` (shared Jenkins repo folder)
 
 Local runs via `run_daily_task_log.sh` **do not** use this gap logic (weekday rules only).
 
@@ -735,5 +735,6 @@ Secrets folder (same for all jobs):
 ├── client-secret.json
 ├── .google-sheets-token.json    # sync job
 ├── .gmail-token.json            # release mail job
-└── .daily_task_log_last_success # written by daily task log job
+# Marker for daily task log gap lookback is in the shared workspace:
+# /var/lib/jenkins/workspace/JIRA-Release-Sync/.daily_task_log_last_success
 ```
