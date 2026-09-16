@@ -353,11 +353,14 @@ Local Jenkins only runs when the machine is awake at the scheduled time.
 | Script | Purpose |
 |--------|---------|
 | `scripts/jenkins_build.sh` | Jenkins entry point (Git checkout + secrets + sync) |
-| `scripts/jenkins_daily_task_log.sh` | Jenkins entry point for daily Excel task log |
+| `scripts/jenkins_daily_task_log.sh` | Jenkins daily task log (gap lookback from last success) |
+| `scripts/jenkins_release_mail_draft.sh` | Jenkins manual Gmail draft job |
 | `scripts/run_sync.sh` | Runs `sync.py`, optional `--days` via argument |
 | `scripts/run_daily_task_log.sh` | Runs `daily_task_log.py` (weekday lookback automatic) |
+| `scripts/run_release_mail_draft.sh` | Runs `release_mail_draft.py` with JIRA ID + service name |
 | `sync.py` | Main JIRA → Sheet sync |
 | `daily_task_log.py` | JIRA → local DailyTaskLogs.xlsx |
+| `release_mail_draft.py` | JIRA → Gmail draft |
 
 ---
 
@@ -384,60 +387,93 @@ For team use, the **Git + `$WORKSPACE`** approach in §5 is recommended so every
 
 ## 11. Jenkins job — Daily task log (Excel)
 
-Local **DailyTaskLogs.xlsx** update on **Monday–Friday**. Lookback is automatic inside `daily_task_log.py`:
-
-| Day | Lookback |
-|-----|----------|
-| Monday | Last **3** days (covers the weekend) |
-| Tue–Fri | Last **1** day |
+Local **DailyTaskLogs.xlsx** update on **Monday–Friday**.
 
 ### What this job does
 
 | Item | Detail |
 |------|--------|
 | Script | `daily_task_log.py` via `scripts/jenkins_daily_task_log.sh` |
-| Schedule | **Mon–Fri ~6:00 PM** (`H 18 * * 1-5`) |
+| Schedule | **Mon–Fri ~6:00 PM** (`H 18 * * 1-5`) — or trigger manually |
 | JQL | `DAILY_TASK_LOG_JQL` in secrets `.env` (separate from `JIRA_JQL`) |
 | Output | Appends to `DAILY_TASK_LOG_WORKBOOK` (local `.xlsx`) |
+
+### Jenkins-only lookback (missed days / leave)
+
+`jenkins_daily_task_log.sh` checks the **previous successful Jenkins build date**:
+
+| Situation | Lookback |
+|-----------|----------|
+| First run ever | Mon = **3** days, Tue–Fri = **1** day |
+| Last success was **yesterday** | **1** day |
+| Last success was **> 1 day** ago (leave, missed runs) | **Calendar gap** in days |
+
+Example: last success **Tuesday**, you are on leave Wed–Thu, job runs **Friday** → gap = **3** → `--days 3` (covers Wed, Thu, Fri window).
+
+Sources (in order):
+
+1. Jenkins API — `lastSuccessfulBuild/buildTimestamp` for this job (`JOB_NAME` is set automatically)
+2. Fallback marker file — `$JIRA_SYNC_SECRETS_DIR/.daily_task_log_last_success`
+
+Local runs via `run_daily_task_log.sh` **do not** use this gap logic (weekday rules only).
+
+Google OAuth is **not** required for this job.
 
 ### Secrets `.env` entries (in addition to JIRA creds)
 
 ```env
-DAILY_TASK_LOG_WORKBOOK=/home/akhilagarwal/Documents/jira-sheet-sync/DailyTaskLogs.xlsx
+DAILY_TASK_LOG_WORKBOOK=/home/akhilagarwal/Documents/Projects/jira-sheet-sync/DailyTaskLogs.xlsx
+DAILY_TASK_LOG_BOARD_PROJECTS=COR,LINUX,ALPINE
+DAILY_TASK_LOG_BOARD_TO_STATUSES=UAT/Staging
 DAILY_TASK_LOG_JQL=project = DEVOPS AND updated >= -1d ...
 DAILY_TASK_LOG_QA_FROM_STATUS=Deployed on dev-int
 DAILY_TASK_LOG_QA_TO_STATUSES=Deployed on-FT,QA Signed OFF
 ```
 
-Google OAuth is **not** required for this job.
+Ensure the Jenkins user can **write** to `DAILY_TASK_LOG_WORKBOOK` (create the `.xlsx` once manually if needed).
 
-### Create the Jenkins job
+### Create the Jenkins job (step by step)
 
-1. **New Item** → name: `JIRA-Daily-Task-Log` → **Freestyle project**
-2. **Source Code Management** → Git (same repo as sync job), branch `*/master`
-3. **Build Triggers** → **Build periodically**:
+1. **New Item** → name: `JIRA-Daily-Task-Log` → **Freestyle project** → **OK**
+2. **General** → optional: **Use custom workspace** →  
+   `/home/akhilagarwal/Documents/Projects/jira-sheet-sync`  
+   (same as your sync job if you use a fixed folder)
+3. **Source Code Management** → **Git** (optional if using custom workspace + manual `git pull`)  
+   - Repository URL: `git@github.com:akhilagarwal01/JIRA-Release_sync.git`  
+   - Branch: `*/main` or `*/master`
+4. **Build Triggers** → **Build periodically** (optional):
 
-```
-H 18 * * 1-5
-```
+   ```
+   H 18 * * 1-5
+   ```
 
-4. **Build Steps** → **Execute shell**:
+5. **Build Steps** → **Execute shell**:
+
+   ```bash
+   export JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets
+   bash "$WORKSPACE/scripts/jenkins_daily_task_log.sh"
+   ```
+
+6. **Save** → **Build Now** → check **Console Output** for:
+
+   ```
+   Previous successful Jenkins build date: 2026-09-10
+   Last success was 3 calendar day(s) ago; extended lookback: 3 day(s)
+   Appended X row(s) to ... → Jul-Sept 26
+   ```
+
+**Optional** — if Jenkins API needs auth:
 
 ```bash
-bash "$WORKSPACE/scripts/jenkins_daily_task_log.sh"
+export JENKINS_URL=http://localhost:8080
+export JENKINS_USER=your-jenkins-user
+export JENKINS_API_TOKEN=your-api-token
 ```
 
-**Local path (no Git in Jenkins):**
+### Manual test (without Jenkins)
 
 ```bash
-bash /home/akhilagarwal/Documents/jira-sheet-sync/scripts/jenkins_daily_task_log.sh
-```
-
-### Manual test
-
-```bash
-bash scripts/run_daily_task_log.sh
-python3 daily_task_log.py --dry-run
+bash scripts/run_daily_task_log.sh --dry-run
 ```
 
 ### DEVOPS QA column
@@ -448,3 +484,131 @@ For each DEVOPS release row, the script checks that **you** did **at least one**
 2. Moved status from `DAILY_TASK_LOG_QA_FROM_STATUS` to one of `DAILY_TASK_LOG_QA_TO_STATUSES`
 
 If **both** are missing, column **QA Check** is set to `QA done by Peer` / `No QA done` (configurable via `DAILY_TASK_LOG_QA_MISSING_NOTE`).
+
+---
+
+## 12. Jenkins job — Release mail draft (manual trigger)
+
+Creates a **Gmail draft** for one DEVOPS release ticket. **No schedule** — run only when you click **Build With Parameters**.
+
+### What this job does
+
+| Item | Detail |
+|------|--------|
+| Script | `release_mail_draft.py` via `scripts/jenkins_release_mail_draft.sh` |
+| Trigger | **Manual only** (Build with Parameters) |
+| Parameters | `JIRA_ID`, `SERVICE_NAME`, optional `DRY_RUN` |
+| Secrets | `.env`, `client-secret.json`, `.gmail-token.json` |
+
+### One-time: copy Gmail token to secrets
+
+After running `release_mail_draft.py` once locally (browser OAuth):
+
+```bash
+cp .gmail-token.json /home/akhilagarwal/jira-secrets/.gmail-token.json
+chmod 600 /home/akhilagarwal/jira-secrets/.gmail-token.json
+```
+
+Ensure secrets `.env` includes:
+
+```env
+GOOGLE_OAUTH_CLIENT_SECRETS_FILE=client-secret.json
+```
+
+### Create the Jenkins job (step by step)
+
+1. **New Item** → name: `JIRA-Release-Mail-Draft` → **Freestyle project** → **OK**
+2. Check **This project is parameterized**
+3. **Add Parameter** → **String Parameter**:
+   - Name: `JIRA_ID` — e.g. `DEVOPS-40011`
+   - Name: `SERVICE_NAME` — e.g. `CORE | HomePage`
+4. **Add Parameter** → **Boolean Parameter** (optional):
+   - Name: `DRY_RUN` — Default: unchecked
+5. **General** → optional custom workspace (same path as other jobs)
+6. **Source Code Management** → Git (same repo) — or skip if using custom workspace
+7. **Build Triggers** — leave **empty** (no cron)
+8. **Build Steps** → **Execute shell**:
+
+   ```bash
+   export JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets
+   bash "$WORKSPACE/scripts/jenkins_release_mail_draft.sh"
+   ```
+
+9. **Save** → **Build with Parameters** → enter JIRA ID and service name
+
+### Manual test (without Jenkins)
+
+```bash
+bash scripts/run_release_mail_draft.sh DEVOPS-40011 "CORE | HomePage"
+bash scripts/run_release_mail_draft.sh DEVOPS-40011 "CORE | HomePage" --dry-run
+```
+
+---
+
+## 13. What to commit to GitHub
+
+Commit **code and docs** only. Never commit secrets or local data.
+
+### Commit to Git
+
+| Path | Purpose |
+|------|---------|
+| `sync.py` | JIRA → Google Sheet sync |
+| `daily_task_log.py` | JIRA → Excel daily task log |
+| `release_mail_draft.py` | JIRA → Gmail draft |
+| `requirements.txt` | Python dependencies |
+| `.env.example` | Template for secrets `.env` |
+| `.gitignore` | Keeps secrets out of Git |
+| `JENKINS.md` | Jenkins setup guide |
+| `README.md` | Project overview |
+| `scripts/jenkins_build.sh` | Sync Jenkins entry point |
+| `scripts/jenkins_daily_task_log.sh` | Daily task log Jenkins entry point |
+| `scripts/jenkins_release_mail_draft.sh` | Release mail Jenkins entry point |
+| `scripts/run_sync.sh` | Local / wrapper for sync |
+| `scripts/run_daily_task_log.sh` | Local / wrapper for daily task log |
+| `scripts/run_release_mail_draft.sh` | Local / wrapper for release mail |
+
+### Do NOT commit (keep on your machine / in `jira-secrets`)
+
+| Path | Purpose |
+|------|---------|
+| `.env` | JIRA tokens, JQL, sheet IDs |
+| `client-secret.json` | Google OAuth client |
+| `.google-sheets-token.json` | Google Sheets refresh token |
+| `.gmail-token.json` | Gmail refresh token |
+| `service-account.json` | Optional service account |
+| `DailyTaskLogs.xlsx` | Local Excel workbook |
+| `.vendor/` | Installed Python packages |
+| `logs/` | Run logs |
+
+### Push workflow
+
+```bash
+cd /home/akhilagarwal/Documents/Projects/jira-sheet-sync
+git add sync.py daily_task_log.py release_mail_draft.py requirements.txt \
+  .env.example .gitignore JENKINS.md README.md scripts/
+git status   # verify no .env or *.json secrets are staged
+git commit -m "Add daily task log and release mail Jenkins jobs"
+git push origin main
+```
+
+On Jenkins: next **Build Now** pulls latest code (Git SCM) or run `git pull` in custom workspace.
+
+### Jenkins jobs quick reference
+
+| Job | Schedule | Shell command |
+|-----|----------|---------------|
+| `JIRA-Sync` (existing) | Weekly Mon | `export JIRA_SYNC_SECRETS_DIR=...; bash "$WORKSPACE/scripts/jenkins_build.sh"` |
+| `JIRA-Daily-Task-Log` | Mon–Fri 6 PM | `export JIRA_SYNC_SECRETS_DIR=...; bash "$WORKSPACE/scripts/jenkins_daily_task_log.sh"` |
+| `JIRA-Release-Mail-Draft` | Manual only | `export JIRA_SYNC_SECRETS_DIR=...; bash "$WORKSPACE/scripts/jenkins_release_mail_draft.sh"` |
+
+Secrets folder (same for all jobs):
+
+```
+/home/akhilagarwal/jira-secrets/
+├── .env
+├── client-secret.json
+├── .google-sheets-token.json    # sync job
+├── .gmail-token.json            # release mail job
+└── .daily_task_log_last_success # written by daily task log job
+```
