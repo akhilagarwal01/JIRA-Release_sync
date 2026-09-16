@@ -9,6 +9,9 @@
 #   fallback). If the gap is > 1 calendar day, uses that gap as --days so missed runs
 #   after leave are covered (e.g. last success Tue, run Fri → --days 3).
 #
+# Optional Jenkins Boolean parameter:
+#   DRY_RUN        check to print rows without writing DailyTaskLogs.xlsx
+#
 # Optional env:
 #   JIRA_SYNC_SECRETS_DIR   default: /opt/jira-sheet-sync-secrets
 #   JENKINS_URL             default: http://localhost:8080 (for lastSuccessfulBuild API)
@@ -126,8 +129,19 @@ PY
 
 LOOKBACK_DAYS=$(compute_jenkins_lookback_days)
 
+ARGS=("$LOOKBACK_DAYS" --force)
+if [[ "${DRY_RUN:-false}" == "true" ]]; then
+  ARGS+=(--dry-run)
+  echo "DRY_RUN enabled — Excel file will not be modified." >&2
+fi
+
 chmod +x "$WORKSPACE/scripts/run_daily_task_log.sh"
-bash "$WORKSPACE/scripts/run_daily_task_log.sh" "$LOOKBACK_DAYS" --force
+bash "$WORKSPACE/scripts/run_daily_task_log.sh" "${ARGS[@]}"
+
+if [[ "${DRY_RUN:-false}" == "true" ]]; then
+  echo "Dry run complete — success marker not updated." >&2
+  exit 0
+fi
 
 date +%Y-%m-%d > "$MARKER_FILE"
 echo "Updated success marker: $MARKER_FILE"

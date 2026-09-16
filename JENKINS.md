@@ -435,26 +435,33 @@ Ensure the Jenkins user can **write** to `DAILY_TASK_LOG_WORKBOOK` (create the `
 ### Create the Jenkins job (step by step)
 
 1. **New Item** → name: `JIRA-Daily-Task-Log` → **Freestyle project** → **OK**
-2. **General** → optional: **Use custom workspace** →  
-   `/home/akhilagarwal/Documents/Projects/jira-sheet-sync`  
-   (same as your sync job if you use a fixed folder)
-3. **Source Code Management** → **Git** (optional if using custom workspace + manual `git pull`)  
-   - Repository URL: `git@github.com:akhilagarwal01/JIRA-Release_sync.git`  
-   - Branch: `*/main` or `*/master`
-4. **Build Triggers** → **Build periodically** (optional):
+2. Check **This project is parameterized**
+3. **Add Parameter** → **Boolean Parameter**:
+   - Name: `DRY_RUN`
+   - Default: unchecked
+   - Description: `Check to preview rows without writing DailyTaskLogs.xlsx`
+4. **General** → **Use custom workspace** →  
+   `/var/lib/jenkins/workspace/JIRA-Release-Sync`  
+   (same shared folder as **Pull JIRA-Sync repository** — see §14)
+5. **Source Code Management** → **None** (run **Pull JIRA-Sync repository** first)
+6. **Build Triggers** → **Build periodically** (optional):
 
    ```
    H 18 * * 1-5
    ```
 
-5. **Build Steps** → **Execute shell**:
+7. **Build Steps** → **Execute shell**:
 
    ```bash
    export JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets
    bash "$WORKSPACE/scripts/jenkins_daily_task_log.sh"
    ```
 
-6. **Save** → **Build Now** → check **Console Output** for:
+8. **Save** → **Build with Parameters** (or **Build Now** if `DRY_RUN` defaults to false)
+
+**Dry run:** check **DRY_RUN** → **Build**. Console prints candidate rows; Excel is not changed and the last-success marker is not updated.
+
+9. Check **Console Output** for a real run:
 
    ```
    Previous successful Jenkins build date: 2026-09-10
@@ -592,15 +599,112 @@ git commit -m "Add daily task log and release mail Jenkins jobs"
 git push origin main
 ```
 
-On Jenkins: next **Build Now** pulls latest code (Git SCM) or run `git pull` in custom workspace.
+On Jenkins: run **Pull JIRA-Sync repository** before other jobs (see §14).
 
 ### Jenkins jobs quick reference
 
 | Job | Schedule | Shell command |
 |-----|----------|---------------|
-| `JIRA-Sync` (existing) | Weekly Mon | `export JIRA_SYNC_SECRETS_DIR=...; bash "$WORKSPACE/scripts/jenkins_build.sh"` |
-| `JIRA-Daily-Task-Log` | Mon–Fri 6 PM | `export JIRA_SYNC_SECRETS_DIR=...; bash "$WORKSPACE/scripts/jenkins_daily_task_log.sh"` |
-| `JIRA-Release-Mail-Draft` | Manual only | `export JIRA_SYNC_SECRETS_DIR=...; bash "$WORKSPACE/scripts/jenkins_release_mail_draft.sh"` |
+| `Pull JIRA-Sync repository` | Manual / upstream | *(Git SCM only — no shell step)* |
+| `JIRA-Release-Sync` | Mon + Thu | see §14 |
+| `JIRA-Daily-Task-Log` | Mon–Fri 6 PM | see §14 |
+| `JIRA-Release-Mail-Draft` | Manual only | see §14 |
+
+---
+
+## 14. Local Jenkins — Pull job + shared workspace (your setup)
+
+You use **two layers**:
+
+1. **`Pull JIRA-Sync repository`** — only runs Git pull into a **shared folder**
+2. **All other jobs** — run scripts from that same folder (no Git in those jobs)
+
+### How it works today
+
+| Job | SCM | Workspace folder | Why it works |
+|-----|-----|------------------|--------------|
+| `Pull JIRA-Sync repository` | Git → GitHub `master` | **`/var/lib/jenkins/workspace/JIRA-Release-Sync`** (custom workspace) | Git checkout lands here |
+| `JIRA-Release-Sync` | None | **`/var/lib/jenkins/workspace/JIRA-Release-Sync`** | Job name matches folder → `$WORKSPACE` is correct automatically |
+| `JIRA-Release-Mail-Draft` | None | `/var/lib/jenkins/workspace/JIRA-Release-Mail-Draft` | **Wrong folder** — empty unless you fix below |
+
+The sync job works without a custom workspace setting because Jenkins sets  
+`WORKSPACE=/var/lib/jenkins/workspace/<job-name>` and your job is named **`JIRA-Release-Sync`**, same path as the Pull job’s custom workspace.
+
+Other jobs (mail draft, daily task log) have **different names** → different empty workspaces → **No such file or directory**.
+
+### Fix for every downstream job (pick one)
+
+#### Option A — Custom workspace (recommended, matches Pull target)
+
+In **Configure** → **Advanced Project Options** → **Use custom workspace**:
+
+```
+/var/lib/jenkins/workspace/JIRA-Release-Sync
+```
+
+Then **Execute shell** can stay:
+
+```bash
+export JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets
+bash "$WORKSPACE/scripts/jenkins_release_mail_draft.sh"
+```
+
+Do the same for `JIRA-Daily-Task-Log` and any future jobs.
+
+#### Option B — Hardcode repo path in Execute shell
+
+No Jenkins UI change; use explicit path:
+
+```bash
+export JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets
+bash /var/lib/jenkins/workspace/JIRA-Release-Sync/scripts/jenkins_release_mail_draft.sh
+```
+
+### Recommended workflow
+
+**Before any downstream job**, get latest code:
+
+1. Run **`Pull JIRA-Sync repository`** → **Build Now**
+2. Then run **`JIRA-Release-Sync`**, **`JIRA-Release-Mail-Draft`**, or **`JIRA-Daily-Task-Log`**
+
+**Optional automation** — on each downstream job, under **Build Triggers**:
+
+- Check **Trigger builds remotely** *or* **Build after other projects are built**
+- Projects to watch: `Pull JIRA-Sync repository`
+
+Or chain manually: Pull → Sync / Mail / Daily log.
+
+### Execute shell per job (shared workspace)
+
+**JIRA-Release-Sync** (already working):
+
+```bash
+export JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets
+bash "$WORKSPACE/scripts/jenkins_build.sh"
+```
+
+**JIRA-Release-Mail-Draft** (after Option A or B):
+
+```bash
+export JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets
+bash "$WORKSPACE/scripts/jenkins_release_mail_draft.sh"
+```
+
+**JIRA-Daily-Task-Log**:
+
+```bash
+export JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets
+bash "$WORKSPACE/scripts/jenkins_daily_task_log.sh"
+```
+
+### Verify Pull + shared folder
+
+```bash
+ls /var/lib/jenkins/workspace/JIRA-Release-Sync/scripts/jenkins_release_mail_draft.sh
+ls /var/lib/jenkins/workspace/JIRA-Release-Sync/release_mail_draft.py
+```
+
+Both should exist after a successful **Pull** build.
 
 Secrets folder (same for all jobs):
 
