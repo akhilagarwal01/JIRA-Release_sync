@@ -430,7 +430,28 @@ DAILY_TASK_LOG_QA_FROM_STATUS=Deployed on dev-int
 DAILY_TASK_LOG_QA_TO_STATUSES=Deployed on-FT,QA Signed OFF
 ```
 
-Ensure the Jenkins user can **write** to `DAILY_TASK_LOG_WORKBOOK` (create the `.xlsx` once manually if needed).
+Use the **project folder** workbook so local runs and Jenkins update the same file:
+
+```env
+DAILY_TASK_LOG_WORKBOOK=/home/akhilagarwal/Documents/Projects/jira-sheet-sync/DailyTaskLogs.xlsx
+```
+
+One-time permissions (Jenkins freestyle jobs run as **SYSTEM**, not the `jenkins` user):
+
+```bash
+bash scripts/setup_daily_log_permissions.sh
+```
+
+This sets project folder `751` (traverse for Jenkins) and `DailyTaskLogs.xlsx` `666` (shared read/write).
+
+Alternative (tighter, run build as `jenkins` user): add to Execute shell:
+
+```bash
+sudo -u jenkins env JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets \
+  DRY_RUN="${DRY_RUN:-false}" bash "$WORKSPACE/scripts/jenkins_daily_task_log.sh"
+```
+
+Requires passwordless sudo for the Jenkins process user → `jenkins` (via `/etc/sudoers.d/`).
 
 ### Create the Jenkins job (step by step)
 
