@@ -11,3 +11,4 @@ logs/
 .vendor/
 DailyTaskLogs.xlsx
 .daily_task_log_last_success
+daily_task_log_slack.properties

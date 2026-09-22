@@ -139,6 +139,56 @@ fi
 chmod +x "$WORKSPACE/scripts/run_daily_task_log.sh"
 bash "$WORKSPACE/scripts/run_daily_task_log.sh" "${ARGS[@]}"
 
+write_slack_summary_properties() {
+  local log_file props board devops sheets result lookback
+  log_file=$(ls -t "$WORKSPACE/logs/daily-task-log-"*.log 2>/dev/null | head -1 || true)
+  props="$WORKSPACE/daily_task_log_slack.properties"
+
+  board=""
+  devops=""
+  sheets=""
+  result=""
+  lookback="$LOOKBACK_DAYS"
+
+  if [[ -n "$log_file" && -f "$log_file" ]]; then
+    board=$(grep -oE 'Found [0-9]+ board' "$log_file" | tail -1 | grep -oE '[0-9]+' || true)
+    devops=$(grep -oE 'and [0-9]+ DEVOPS' "$log_file" | tail -1 | grep -oE '[0-9]+' || true)
+    sheets=$(
+      grep -oE 'Sheet tab\(s\) \(auto quarterly\): .+' "$log_file" | tail -1 \
+        | sed 's/.*: //' || true
+    )
+    if grep -q 'Appended [0-9]\+ row' "$log_file"; then
+      result=$(grep -oE 'Appended [0-9]+ row\(s\) to .+' "$log_file" | tail -1 || true)
+    elif grep -q 'No new rows written' "$log_file"; then
+      result="No new rows (all TaskIds already in sheet)"
+    elif grep -q 'All candidate rows already exist' "$log_file"; then
+      result="No new rows (all TaskIds already in sheet)"
+    else
+      result="See Jenkins console log"
+    fi
+  else
+    result="Log file not found — see Jenkins console"
+  fi
+
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    result="DRY RUN — Excel not modified"
+  fi
+
+  {
+    echo "DAILY_LOG_LOOKBACK=${lookback:-?}"
+    echo "DAILY_LOG_BOARD=${board:-0}"
+    echo "DAILY_LOG_DEVOPS=${devops:-0}"
+    echo "DAILY_LOG_SHEETS=${sheets:-n/a}"
+    echo "DAILY_LOG_RESULT=${result:-n/a}"
+    echo "DAILY_LOG_SLACK_LINE=Lookback ${lookback:-?}d | ${board:-0} board + ${devops:-0} DEVOPS | ${result:-n/a} | Sheet: ${sheets:-n/a}"
+  } > "$props"
+
+  echo "Slack summary properties: $props"
+  cat "$props"
+}
+
+write_slack_summary_properties
+
 if [[ "${DRY_RUN:-false}" == "true" ]]; then
   echo "Dry run complete — success marker not updated." >&2
   exit 0

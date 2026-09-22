@@ -498,6 +498,55 @@ export JENKINS_USER=your-jenkins-user
 export JENKINS_API_TOKEN=your-api-token
 ```
 
+### Slack — custom success message (upsert details)
+
+The default **Slack Notification Plugin** message only shows job name and duration.
+
+After each run, `jenkins_daily_task_log.sh` writes:
+
+```
+$WORKSPACE/daily_task_log_slack.properties
+```
+
+(with lookback, board/DEVOPS counts, rows appended, sheet tab).
+
+#### Option A — Webhook script (no EnvInject plugin) **recommended**
+
+1. In Slack: create an **Incoming Webhook** for `#daily_task_log` (or use your existing app).
+2. Add to **`/home/akhilagarwal/jira-secrets/.env`** (never commit):
+
+   ```env
+   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../...
+   ```
+
+3. **Pull** latest repo, then in **JIRA-Daily-Task-Log** → **Configure**:
+   - **Post-build Actions** → **Execute shell** (runs on success only if you tick “Run only if build succeeds”, or use **Conditional** post-build if available):
+
+   ```bash
+   export JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets
+   bash "$WORKSPACE/scripts/post_slack_daily_log_summary.sh"
+   ```
+
+4. **Optional:** disable or remove the generic **Slack Notifications** post-build step to avoid **two** messages per build.
+
+This posts a rich message with upsert details from the properties file.
+
+#### Option B — Token Macro Plugin (if EnvInject is unavailable)
+
+1. Install **Token Macro Plugin** (search `Token Macro` in **Manage Jenkins** → **Plugins**).
+2. Keep **Slack Notifications** post-build; in **Advanced** → **Custom Message**, try:
+
+   ```
+   Daily Task Log #${BUILD_NUMBER}
+   ${FILE,path=daily_task_log_slack.properties}
+   ```
+
+   (Exact macro names vary by version; see Token Macro help in Jenkins.)
+
+#### Option C — EnvInject (if your Jenkins has it)
+
+Search plugins for **EnvInject** or **Inject environment variables**, inject `$WORKSPACE/daily_task_log_slack.properties`, then use `${DAILY_LOG_RESULT}` etc. in Slack custom message. Many local Jenkins installs do not ship this plugin anymore — use Option A instead.
+
 ### Manual test (without Jenkins)
 
 ```bash
