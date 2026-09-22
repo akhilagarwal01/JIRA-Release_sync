@@ -519,15 +519,24 @@ $WORKSPACE/daily_task_log_slack.properties
    SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../...
    ```
 
-3. **Pull** latest repo, then in **JIRA-Daily-Task-Log** → **Configure**:
-   - **Post-build Actions** → **Execute shell** (runs on success only if you tick “Run only if build succeeds”, or use **Conditional** post-build if available):
+3. **Pull** latest repo, then in **JIRA-Daily-Task-Log** → **Configure** → **Build Steps** → **Execute shell** (Freestyle jobs do **not** offer Execute shell under Post-build Actions):
 
    ```bash
    export JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets
+   bash "$WORKSPACE/scripts/jenkins_daily_task_log.sh"
+   ```
+
+   `jenkins_daily_task_log.sh` automatically calls `post_slack_daily_log_summary.sh` at the end when `SLACK_WEBHOOK_URL` is set in `jira-secrets/.env`.
+
+   Or call it explicitly in the same block:
+
+   ```bash
+   export JIRA_SYNC_SECRETS_DIR=/home/akhilagarwal/jira-secrets
+   bash "$WORKSPACE/scripts/jenkins_daily_task_log.sh"
    bash "$WORKSPACE/scripts/post_slack_daily_log_summary.sh"
    ```
 
-4. **Optional:** disable or remove the generic **Slack Notifications** post-build step to avoid **two** messages per build.
+4. **Optional:** remove the generic **Slack Notifications** post-build step to avoid **two** Slack messages (generic + detailed webhook).
 
 This posts a rich message with upsert details from the properties file.
 

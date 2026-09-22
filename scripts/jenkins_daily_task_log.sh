@@ -196,3 +196,7 @@ fi
 
 date +%Y-%m-%d > "$MARKER_FILE"
 echo "Updated success marker: $MARKER_FILE"
+
+if [[ -x "$WORKSPACE/scripts/post_slack_daily_log_summary.sh" ]]; then
+  bash "$WORKSPACE/scripts/post_slack_daily_log_summary.sh" || true
+fi
